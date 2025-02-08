@@ -44,7 +44,7 @@ def get_length(edge):
     length=edge['length']
     return length
 
-def get_time(edge):
+def get_time(edge,use_sinusoidality=True):
     
     # Calculation and return of travel time trough an edge
     length_attr=edge["length"] # Edge length from the attribute
@@ -55,48 +55,40 @@ def get_time(edge):
     else:
         
         road_type = edge["highway"]
-        if road_type in DEFAULT_MAXSPEEDS.keys():
+        if isinstance(road_type, str) and road_type in DEFAULT_MAXSPEEDS.keys():
             # Calculate maximum speed from road type if it is in the dictionary
             max_speed = DEFAULT_MAXSPEEDS[road_type] / 3.6
         else:
             # Set maximum speed to 18.89 m/s (50 km/h)
             max_speed=50/3.6
-    if "geometry" in edge:
-        shapely_length=edge['geometry'].length  # Using shapely length to calculate sinusoidality
-        coords = edge['geometry'].coords
-        x1, y1 = coords[0]  # First point
-        x2, y2 = coords[-1]  # Last point
-        start_point = Point(x1, y1)
-        end_point = Point(x2, y2)
-        euclidean_distance = start_point.distance(end_point) # Distance between first and last point of the Linestring
+    if use_sinusoidality and "geometry" in edge:
+        shapely_length = edge["geometry"].length  # Total path length
+        start_point, end_point = Point(edge["geometry"].coords[0]), Point(edge["geometry"].coords[-1])
+        euclidean_distance = start_point.distance(end_point)
         sinusoidality = shapely_length / euclidean_distance if euclidean_distance != 0 else 1
         enhanced_distance = sinusoidality * length_attr
-        time = enhanced_distance / max_speed  # Time in seconds
-    else:
-        time=length_attr/max_speed
-    return time
+        return enhanced_distance / max_speed
+
+    # Simple calculation when sinusoidality is off or no geometry exists
+    return length_attr / max_speed
 
 
 
 def graph_dict(graph_from_osm,weight_type):
     # Creation of a simple dictionary for further processing
     
-    if weight_type=="length":
-        get_weight=get_length
-    elif weight_type=="time":
-        get_weight=get_time
+    if weight_type == "length":
+        get_weight = get_length
+    elif weight_type == "time":
+        get_weight = lambda edge: get_time(edge, use_sinusoidality=True)  # Use sinusoidality
+    elif weight_type == "time_simple":
+        get_weight = lambda edge: get_time(edge, use_sinusoidality=False)  # Skip sinusoidality
     else:
-        raise ValueError(f"Invalid weight_type: {weight_type}. Must be 'length' or 'time'.")
-    G={}
-    for node, neighbors in graph_from_osm.adjacency():
-        
-        # Initialization of subdicionary for each node
-        G[node] = {}
-        for neighbor, edge in neighbors.items():
-            
-            # Assign weight to neighbour
-            weight=get_weight(edge)
-            G[node][neighbor] = weight
+        raise ValueError(f"Invalid weight_type: {weight_type}. Must be 'length', 'time', or 'time_simple'.")
+
+    G = {node: {neighbor: get_weight(edge) for neighbor, edge in neighbors.items()} 
+         for node, neighbors in graph_from_osm.adjacency()}
+    
     return G
 
 def dijkstra(graph, start):
@@ -234,7 +226,7 @@ multidi_coimbra,graph_coimbra=load_data(place_name)
 start_node=252865248
 end_node=1601656647
 
-weights="length"
+weights="time_simple"
 
 G=graph_dict(graph_coimbra,weights)
 
@@ -244,7 +236,7 @@ distances,predecessors=dijkstra(G,start_node)
 path_weight=get_distance(distances,end_node)
 
 
-if weights=="time":
+if weights=="time" or weights=="time_simple":
     print(f"Total time of the shortest path is {path_weight} seconds.")
 if weights=="length":
     print(f"Total length of the shortest path is {path_weight} meters.")
